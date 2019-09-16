@@ -1,0 +1,534 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--EXTERNAL_PROPERTIES: usdDatabaseVersion, CCNetLabel-->
+<project name="CodeCampServer" xmlns="http://nant.sf.net/schemas/nant.xsd">
+
+  	<!-- ******************** -->
+  	<!-- Master Build Targets -->
+  	<!-- ******************** -->
+  	<target name="build" depends="init, commonassemblyinfo, create-hibernate-cfg, dropDatabase, createDatabase, compile, move-for-test, test, package"/>
+  	<target name="cruise" depends="build, package, create-template"/>	
+  	<target name="integrationBuild" depends="init, commonassemblyinfo, dropDatabase, createDatabase,, compile, move-for-test, coverage, inspection,package"/>
+  	<target name="publish" depends="init, revert, commonassemblyinfo, dropDatabase, createDatabase,check-projects-for-default-namespace,set-defaults-in-nhibernate-config, compile, move-for-test, test, package,commitPackage"/>
+  	<target name="inspection" depends="sourcemonitor,fxcop,stylecop"/>
+
+  <!-- ************** -->
+	<!-- Initialization -->
+	<!-- ************** -->
+
+	<include buildfile="common.build"/>
+	<loadtasks assembly="lib/nantcontrib-0.85/bin/NAnt.Contrib.Tasks.dll" />
+	<loadtasks assembly="lib\ncover\Build Task Plugins\NCoverExplorer.NAntTasks.dll" />
+  	<loadtasks assembly="lib\ndepend\nant\NDepend.Build.NAntTasks.dll" />
+  	<loadtasks assembly="lib\gallio\Gallio.NAntTasks.dll" />
+  	<loadtasks assembly="lib\nant\Tarantino.Nant.Tasks.dll" />
+
+
+	<!-- ***************** -->
+	<!-- Master Properties -->
+	<!-- ***************** -->
+	<property name="company.name" value=""/>
+
+	<!-- Version settings -->
+	<property name="svn.executable" value="lib/subversion/svn.exe" dynamic="true" if="${not property::exists('svn.executable')}" />
+	<property name="revisionnumber" value="9999" dynamic="true"/>
+	<property name="revisionnumber" value="${CCNetLabel}" if="${property::exists('CCNetLabel')}"/>
+	<property name="revisionnumber" value="${BUILD_NUMBER}" if="${property::exists('BUILD_NUMBER')}"/>
+	<property name="project.fullversion" value="1.0.${revisionnumber}.0" dynamic="true"/>
+	<property name="project.config" value="release"/>
+
+	<!-- Folder references -->
+  <property name="dir.root" value="${path::get-full-path('.')}"/>
+  <property name="dir.solution" value="src"/>
+  <property name="dir.config" value="${dir.root}/config"/>
+	<property name="dir.ui" value="${dir.solution}/UI"/>
+	<property name="dir.build" value="build" dynamic="true"/>
+	<property name="dir.test" value="${dir.build}/${nant.settings.currentframework}-${project.config}"/>
+	<property name="dir.package" value="${dir.build}/package"/>
+	<property name="dir.results" value="${dir.build}/results"/>
+	<property name="dir.installerpackage" value="latestVersion" />
+
+	<property name="package.file.name" value="${dir.installerpackage}/${project::get-name()}Package.zip" />
+  
+
+	<!-- Compilation settings -->
+	<property name="nant.settings.currentframework" value="net-3.5" />
+	<property name="file.solution" value="${dir.solution}/${project::get-name()}.sln"/>
+
+	<!-- Database migration settings -->
+	<property name="database.script.directory" value="${dir.solution}/Database" />
+  <property name="database.server" value="localhost\sqlexpress" overwrite="false"/>
+	<property name="database.name" value="${project::get-name()}" overwrite="false"/>
+	<property name="database.integrated" value="true" overwrite="false" />
+	<property name="database.username" value="dbuser" overwrite="false"/>
+	<property name="database.password" value="P@ssword1" overwrite="false"/>
+	<property name="database.environment.variable.name" value="NANT_DATABASE_SERVER" overwrite="false"/>
+	<if test="${environment::variable-exists(database.environment.variable.name)}">
+		<property name="database.server" value="${environment::get-variable(database.environment.variable.name)}" overwrite="true"/>
+	</if>
+
+	<!-- NHibernate Settings -->
+	<property name="local.connection.string" value="server=${database.server};database=${database.name};Integrated Security=true;"/>
+
+	<!-- Testing settings -->
+	<property name="assembly.unittests" value="${project::get-name()}.UnitTests.dll"/>
+	<property name="assembly.integrationtests" value="${project::get-name()}.IntegrationTests.dll"/>
+	<property name="ui.port" value="8083"/>
+	<property name="ui.url" value="http://localhost:${ui.port}"/>
+	<property name="webout.txt" value="${dir.results}/webout.txt"/>
+	<property name="httpwait.txt" value="${dir.results}/httpwait.txt"/>
+
+  	<property name="svnargs.template" value="--username TODO --password TODO --no-auth-cache --non-interactive " />
+  	<property name="svnargs" value=" --non-interactive " />
+
+
+	<!-- ********************* -->
+	<!-- NUnit Testing Targets -->
+	<!-- ********************* -->
+	<target name="move-for-test">
+		<copy todir="${dir.test}" flatten="true">
+			<fileset basedir="${dir.solution}">
+				<include name="/**/bin/${project.config}/**" />
+				<include name="/**/UI/bin/**" />
+				<include name="*.config"/>
+				<include name="*.cfg.xml"/>
+			</fileset>
+		</copy>
+    <xmlpoke file="${dir.test}/hibernate.cfg.xml"	xpath="//*/hbm:property[@name='connection.connection_string']"	value="${local.connection.string}">
+      <namespaces>
+        <namespace prefix="hbm" uri="urn:nhibernate-configuration-2.2"></namespace>
+      </namespaces>
+    </xmlpoke>
+
+		
+	</target>
+
+  <target name="test">
+		<delete dir="${dir.results}" if="${directory::exists('${dir.results}')}" />
+		<mkdir dir="${dir.results}"/>
+
+		<nunit2 failonerror="true" verbose="true">
+			<formatter type="Xml" outputdir="${dir.results}" usefile="true" extension=".xml"/>
+			<formatter type="Plain" />
+			<test assemblyname="${dir.test}/${assembly.unittests}"/>
+		</nunit2>
+
+		<nunit2 failonerror="true" verbose="true">
+			<formatter type="Xml" outputdir="${dir.results}" usefile="true" extension=".xml"/>
+			<formatter type="Plain" />
+			<test assemblyname="${dir.test}/${assembly.integrationtests}">
+				<categories>
+					<exclude name="DataLoader"/>
+				</categories>
+			</test>
+		</nunit2>
+
+		<nunit2 failonerror="true" verbose="true">
+			<formatter type="Plain" />
+			<test assemblyname="${dir.test}/${assembly.integrationtests}">
+				<categories>
+					<include name="DataLoader"/>
+					<exclude name="*"/>
+				</categories>
+			</test>
+		</nunit2>
+	</target>
+
+	<target name="integration-tests">
+		<nunit2 failonerror="true" verbose="true">
+			<formatter type="Xml" outputdir="${dir.results}" usefile="true" extension=".xml"/>
+			<formatter type="Plain" />
+			<test assemblyname="${dir.test}/${assembly.integrationtests}">
+				<categories>
+					<exclude name="DataLoader"/>
+					<exclude name="SchemaExport"/>
+				</categories>
+			</test>
+		</nunit2>
+
+		<nunit2 failonerror="true" verbose="true">
+			<formatter type="Xml" outputdir="${dir.results}" usefile="true" extension=".xml"/>
+			<formatter type="Plain" />
+			<test assemblyname="${dir.test}/${assembly.integrationtests}">
+				<categories>
+					<include name="DataLoader"/>
+					<exclude name="*"/>
+				</categories>
+			</test>
+		</nunit2>
+	</target>
+
+	<!-- ********************************** -->
+	<!-- Database Change Management Targets -->
+	<!-- ********************************** -->
+	<target name="reset-database" depends="dropDatabase, createDatabase,  move-for-test">
+		<nunit2 failonerror="true" verbose="true">
+			<formatter type="Plain" />
+			<test assemblyname="${dir.test}/${assembly.integrationtests}">
+				<categories>
+					<include name="SchemaExport"/>
+					<exclude name="*"/>
+				</categories>
+			</test>
+		</nunit2>
+	</target>
+
+  	<target name="db-migration">    
+    	<delete file="${database.script.directory}/Update/_New_Script.sql"  />
+    	<call target="reset-database" />
+    	<call target="create-versioned-database" />
+    	<property name="migrationScriptName" value="${migration::next-migration-number(database.script.directory+'/Update')}_AutoGeneratedMigration.sql"/>
+
+    	<if test="${file::exists('c:\program files (x86)\red gate\SQL Compare 8\SQLCompare.exe')}" >
+    	  	<property name="redgate.exe" value="c:\program files (x86)\red gate\SQL Compare 8\SQLCompare.exe"/>
+    	</if>
+
+    	<if test="${file::exists('c:\program files\red gate\SQL Compare 8\SQLCompare.exe')}" >
+      		<property name="redgate.exe" value="c:\prog		ram files\red gate\SQL Compare 8\SQLCompare.exe"/>
+    	</if>
+
+    	<exec
+      		program="${redgate.exe}"
+      		commandline="/f /v /server1:${database.server} /server2:${database.server} /database1:${database.name} /database2:${database.name}Versioned /scriptfile:${database.script.directory}/Update/_New_Script.sql  /exclude:Table:usd_AppliedDatabaseScript"
+      		resultproperty="execReturnCode"
+      		failonerror ="false"/>
+      	<fail if="${execReturnCode != '0' and execReturnCode != '63'}" message="Redgate Compare Failed!"/>
+
+	    <if test="${file::exists(database.script.directory + '/Update/_New_Script.sql') == false}">
+	    	<echo message=""/>
+	      	<echo message="---------------------"/>
+	      	<echo message="No Migration Required"/>
+	    </if>
+
+    	<if test="${file::exists(database.script.directory + '/Update/_New_Script.sql')}">
+        	<move file="${database.script.directory}/Update/_New_Script.sql" tofile="${database.script.directory}/Update/${migrationScriptName}"/>
+        	<echo message="Created Migration File ${database.script.directory}/Update/${migrationScriptName}"/>
+      	</if>
+
+  	</target>
+
+  	<target name="create-versioned-database">
+    	<echo message="Creating Versioned Database"/>
+		<tstamp></tstamp>
+    	<manageSqlDatabase
+			action="Drop"
+			server="${database.server}"
+			integratedAuthentication="true"
+			database="${database.name}Versioned"
+			username=""
+			password="" />
+
+	    <manageSqlDatabase
+			scriptDirectory="${database.script.directory}"
+			action="Create"
+			server="${database.server}"
+			integratedAuthentication="true"
+			database="${database.name}Versioned"
+			username=""
+			password="" />
+
+  	</target>
+
+  	<!-- **************************** -->
+	<!-- Deployment Packaging Targets -->
+	<!-- **************************** -->
+	<target name="package">
+		<delete dir="${dir.package}" if="${directory::exists('${dir.package}')}" />
+		<mkdir dir="${dir.package}"/>
+
+		<copy todir="${dir.package}\website" includeemptydirs="false">
+			<fileset basedir="${dir.solution}\UI">
+				<include name="images\**"/>
+		        <include name="css\**"/>
+        		<exclude name="obj\**"/>
+        		<exclude name="CodeTemplates\**"/>
+        		<exclude name="**\*.user"/>
+        		<exclude name="**\*.dtd"/>
+        		<exclude name="**\*.tt"/>
+        		<exclude name="**\*.cs"/>
+				<exclude name="**\*.csproj"/>
+				<include name="**\**"/>
+			</fileset>
+		</copy>
+
+    <copy todir="${dir.package}\website\Prince" includeemptydirs="false" overwrite="true">
+      <fileset basedir="lib\Prince">
+        <include name="**\**"/>
+      </fileset>
+    </copy>
+
+
+    <copy todir="${dir.package}\BatchAgents" includeemptydirs="false">
+      <fileset basedir="lib\tinoBatchJobs">
+        <include name="*.*"/>
+      </fileset>
+    </copy>
+
+
+    <copy todir="${dir.package}\BatchAgents" includeemptydirs="false" flatten="true">
+      <fileset basedir="${dir.solution}\UI">
+        <include name="bin\*.dll"/>
+      </fileset>
+    </copy>
+
+
+    <copy todir="${dir.package}\BatchAgents" includeemptydirs="false" flatten="true">
+      <fileset basedir="${dir.solution}\">
+        <include name="**\*.config"/>
+        <include name="*.xml"/>
+      </fileset>
+    </copy>
+
+    <copy todir="${dir.package}\BatchAgents" includeemptydirs="false" flatten="true">
+      <fileset basedir="${dir.solution}\DependencyResolution">
+        <include name="bin\${project.config}\*.*"/>
+      </fileset>
+    </copy>
+
+    <copy todir="${dir.package}\BatchAgents" includeemptydirs="false" flatten="true">
+      <fileset basedir="${dir.solution}\Infrastructure">
+        <include name="bin\${project.config}\*.*"/>
+      </fileset>
+    </copy>
+
+	<!-- overwrite the default tino app config with project specific settings -->
+	<copy todir="${dir.package}\BatchAgents" includeemptydirs="false" verbose="true" overwrite="true">
+      <fileset basedir="${dir.solution}\DependencyResolution">
+        <include name="BatchJobs.Console.exe.config"/>                       
+      </fileset>
+    </copy>
+
+    <xmlpoke file="${dir.package}\website\web.config"  
+             xpath="/configuration/appSettings/add[@key = 'PrincePathToExe']/@value" 
+             value="Prince/Engine/bin/prince.exe" />
+
+
+    <copy todir="${dir.package}\database" includeemptydirs="false">
+			<fileset basedir="${dir.solution}\Database">
+				<include name="**\*.sql"/>
+			</fileset>
+		</copy>
+
+		<copy todir="${dir.package}\tests\tools" includeemptydirs="false">
+			<fileset basedir="lib">
+				<include name="cassini\**\*.*"/>
+				<include name="nunit\**\*.*"/>
+				<include name="gallio\**\*.*"/>
+			</fileset>
+		</copy>
+
+		<copy todir="${dir.package}\tests" flatten="true">
+			<fileset basedir="${dir.solution}">
+				<include name="/**/bin/${project.config}/**" />
+				<include name="*.config"/>
+				<include name="*.cfg.xml"/>
+			</fileset>
+		</copy>
+
+		<copy todir="${dir.package}\nant" includeemptydirs="false">
+			<fileset basedir="${nant::get-base-directory()}">
+		        <exclude name="**\*.pdb"/>
+		        <exclude name="**\*.xml"/>
+			<include name="**" />
+			</fileset>
+		</copy>
+
+		<copy todir="${dir.package}">
+			<fileset basedir="deployment">
+				<include name="**" />
+			</fileset>
+		</copy>
+
+		<delete file="${dir.installerpackage}/${project::get-name()}Package.exe" />
+		<exec  program="lib\7zip\7za.exe" workingdir="${dir.package}" commandline=" a -mx=9 -r -sfx ..\..\${dir.installerpackage}/${project::get-name()}Package.exe *.*" verbose="true" />
+  	</target>
+
+	<target name="commitPackage" depends="package">
+		<exec program="${svn.executable}" workingdir="." commandline="ci latestVersion  -m&quot;automatic check-in&quot;" verbose="true" failonerror="false" />
+	</target>
+
+	<!-- ********************* -->
+	<!-- Code Analysis Targets -->
+	<!-- ********************* -->
+	<target name="analyze">
+		<exec program="lib\ndepend\NDepend.Console.exe">
+			<arg value="${directory::get-current-directory()}\lib\ndepend\${project::get-name()}.xml" />
+		</exec>
+	</target>
+
+	<target name="sourcemonitor">
+	<property name="MaxCcValue" value="18"/>
+	 <!-- Create input command file -->
+	 <property name="sourcemonitor.input" value="${dir.test}\sm_cmd.xml" /> 
+	 <echo file="${sourcemonitor.input}" append="false" failonerror="false">
+	  <![CDATA[
+	  <?xml version="1.0" encoding="UTF-8" ?>
+	  <sourcemonitor_commands>
+	   <write_log>false</write_log>
+	   <command>
+	    <project_file>${dir.results}\sm_project.smp</project_file>
+	    <project_language>CSharp</project_language>
+	    <source_directory>${dir.solution}</source_directory>
+	    <include_subdirectories>true</include_subdirectories>
+	    <checkpoint_name>0</checkpoint_name>
+	    <export>
+	     <export_file>${dir.results}\sm_summary.xml</export_file>
+	     <export_type>1</export_type>
+	    </export>
+	   </command>
+	   <command>
+	    <project_file>${dir.results}\sm_project.smp</project_file>
+	    <checkpoint_name>0</checkpoint_name> 
+	    <export>
+	     <export_file>${dir.results}\sm_details.xml</export_file>
+	     <export_type>2</export_type>
+	    </export>
+	   </command> 
+	  </sourcemonitor_commands>
+	  ]]>
+	 </echo>
+
+	 <!-- Execute the commands -->
+	<exec program="lib\sourcemonitor\sourcemonitor.exe" commandline="/C ${sourcemonitor.input}" failonerror="false" />
+	<style style="lib\sourcemonitor\SourceMonitorSummaryGeneration.xsl" in="${dir.results}\sm_details.xml" out="${dir.results}\sm_top15.xml" />
+
+	<xmlpeek
+	    file="${dir.results}\sm_top15.xml"
+	    xpath="/SourceMonitorComplexitySummary/MostComplexMethods/Method[1]/Complexity"
+	    property="maxcomplexity">
+	</xmlpeek>
+
+	<if test="${int::parse(maxcomplexity)>int::parse(MaxCcValue)}">
+		<fail message="Max Cycolmatic Complexity was exceeded! CC=${maxcomplexity}"/>
+	</if>	
+	</target>
+
+
+	<target name="fxcop">
+		<exec program="lib\FxCop\FxCopCmd.exe" commandline="/out:${dir.results}\FxCopy.xml  /file:${dir.test}\${project::get-name()}.*.dll /quiet /d:${dir.test} /c /summary" failonerror="false" />
+	</target>
+
+
+	<target name="stylecop">
+		<exec program="lib\StyleCop\Net.SF.StyleCopCmd.Console\StyleCopCmd.exe" commandline="-sf ${file.solution} -of ${dir.results}\stylecop.xml" failonerror="false" />			        
+	</target>
+
+
+	<target name="coverage">
+		<delete dir="${dir.results}" if="${directory::exists('${dir.results}')}" />
+		<mkdir dir="${dir.results}"/>
+
+    		<exec 
+			program=".\lib\ncover\NCover.Console.exe"
+			commandline=" .\lib\nunit\nunit-console.exe ${assembly.unittests} /noshadow /nologo /nodots  /xml=..\..\${dir.results}/${assembly.unittests}.tests.xml  //x ${dir.results}/${assembly.unittests}.Coverage.xml  //ias ${project::get-name()}.Core;${project::get-name()}.UI;${project::get-name()}.Infrastructure;${project::get-name()}.DependencyInjection //w ${dir.test} //reg"
+		/>
+
+    		<exec 
+			program=".\lib\ncover\NCover.Console.exe"
+			commandline=" .\lib\nunit\nunit-console.exe ${assembly.integrationtests} /exclude:DataLoader /noshadow /nologo /nodots  /xml=..\..\${dir.results}/${assembly.integrationtests}.tests.xml  //x ${dir.results}/${assembly.integrationtests}.Coverage.xml  //ias ${project::get-name()}.Core;${project::get-name()}.UI;${project::get-name()}.Infrastructure;${project::get-name()}.DependencyInjection //w ${dir.test} //reg"
+		/>
+
+    		<exec 
+			program="lib\ncover\NCoverExplorer.Console.exe"
+			commandline="${dir.results}\*.coverage.xml /x:${dir.results}\coverage.xml /h:${dir.results}\CodeCoverage.html /r:ModuleClassSummary /p:${project::get-name()}"
+		/>
+
+	</target>
+
+	<!-- ******************************* -->
+	<!-- Regression Test Suite Execution -->
+	<!-- ******************************* -->
+
+	<!-- Called from the build server to run regression test -->
+	<target name="new-cruise-uitest" depends="init, uitest.init">
+		<echo message="Unpacking ${project::get-name()}..." />
+		<unzip zipfile="${package.file.name}" todir="${dir.build}" />
+
+		<echo message="SQL Server - Deploying to UITest" />
+		<exec program="lib\Tarantino\Tarantino.Deployer.Console.exe" workingdir="lib\Tarantino\" commandline="Deploy ${project::get-name()} UITestSqlServer Current" verbose="true" />
+
+		<property name="ui.test.dir" value="${dir.build}/database" />
+		<call target="regressionTest" />
+
+		<foreach item="Line" in="lib\Tarantino\TarantinoDeploymentRevisionNumber.txt" property="revisionNumber">
+			<echo message="Record deploying revision ${revisionNumber} to UITest" />
+			<exec program="lib\Tarantino\Tarantino.Deployer.Console.exe" workingdir="lib\Tarantino\" commandline="Certify ${project::get-name()} UITestSqlServer ${revisionNumber}" verbose="true" />
+		</foreach>
+
+	</target>
+
+	<!-- Called locally to run regression test -->
+	<target name="new-uitest" depends=" uitest.init, spinup-casini, wait-on-web-server-ready, regressionTest"/>
+
+	<!-- Waits on web server to initialize before executing WATiN tests -->
+	<target name="wait-on-web-server-ready" >
+		<mkdir dir="${dir.results}" failonerror="false" />
+		<get src="${ui.url}/login/login?username=system&amp;password=system" dest="${httpwait.txt}" usetimestamp="true"/>
+	</target>
+
+	<!-- Start ASP.NET development web server for smoke test execution on local development workstation -->
+	<target name="spinup-casini" >
+		<exec
+			program="lib\cassini\ConsoleCassini-v35.exe" workingdir="." commandline="${dir.ui} ${ui.port}"
+			verbose="true" output="${webout.txt}" pidproperty="webserver.pid" spawn="true"/>
+		<echo message="Spwned webserver with PID=${webserver.pid}"/>
+		<sleep seconds="1"/>
+	</target>
+
+	<!-- Initialize WATiN attributes -->
+	<target name="uitest.init">
+		<property name="ui.port" value="80"/>
+		<property name="ui.url" value="http://localhost:${ui.port}"/>
+
+		<property name="ui.test.dir" value="${dir.test}" />
+
+		<setenv name="SITE" value="${ui.url}"/>
+	</target>
+
+	<!-- Close all IE instances between regression test suite executions -->
+	<target name="closeAllBrowserWindows">		<echo message="Closing all dangling browser instances."/>
+		<exec program="taskkill" commandline=" /F /IM iexplore.exe" failonerror="false"/>
+	</target>
+
+	<!-- Actually executes WATiN tests -->
+	<target name="regressionTest">
+		<trycatch>
+			<try>
+				<gallio verbose="true" report-directory="${dir.results}" report-types="html;xml-inline" filter="CategoryName:Smoke" runner-type="IsolatedAppDomain" echo-results="false">
+					<assemblies>
+						<include name="${ui.test.dir}/${project::get-name()}.RegressionTests.dll" />
+					</assemblies>
+				</gallio>
+				<gallio verbose="true" report-directory="${dir.results}" report-types="html;xml-inline" filter="not CategoryName:Smoke" runner-type="IsolatedAppDomain" echo-results="false" >
+					<assemblies>
+						<include name="${ui.test.dir}/${project::get-name()}.RegressionTests.dll" />
+					</assemblies>
+				</gallio>
+			</try>
+			<catch>
+				<property name="test.failure" value="true"/>
+			</catch>
+		</trycatch>
+
+		<call target="closeAllBrowserWindows"/>
+
+		<fail if="${property::exists('test.failure')}" message="Failure occured in testing"/>
+	</target>
+  <target name="create-template">
+    <property name="newsolution" value="CcsArchitecture"/>
+    <property name="templatedir" value="..\_CcsTemplate"/>
+    
+    <exec program="lib\solutionfactory\SolutionFactory-console.exe" commandline="export ${file.solution} ${templatedir}"></exec>
+    <delete dir="${templatedir}\template\build"  />
+    <delete dir="${templatedir}\template\src\_ReSharper.CodeCampServer"  />
+    <delete file="${templatedir}\template\latestversion\safesolutionnamepackage.exe"  />
+    <delete file="${templatedir}\template\readme.txt"  />
+    <exec program="lib\solutionfactory\SolutionFactory-console.exe" commandline="create ${templatedir}\template\ ${newsolution} ${templatedir}\..\${newsolution}"></exec>
+    <exec program="cmd" commandline="/c build.bat build" workingdir="${templatedir}\..\${newsolution}\"></exec>
+    <copy todir="${templatedir}\" flatten="true">
+      <fileset basedir="lib\solutionfactory">
+        <include name="*.*" />
+      </fileset>
+    </copy>
+    <exec  program="lib\7zip\7za.exe" workingdir="${templatedir}\template\" commandline=" a -mx=9 -r -sfx ${dir.root}\${dir.installerpackage}/VisualStudioTemplate.exe *.*" verbose="true" />
+  </target>
+</project>

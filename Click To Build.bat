@@ -1,0 +1,3 @@
+psake.bat integrationBuild %* & pause
+
+

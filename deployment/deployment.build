@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--EXTERNAL_PROPERTIES: driver.class;connection.string;website.target.dir;dialect;local.connection.string;database.server;-->
+<project name="CodeCampServer" default="deploy" xmlns="http://nant.sf.net/release/0.85-rc4/nant.xsd">
+
+ <loadtasks assembly="nant\NAnt.NUnit2Tasks.dll" />
+
+  <property name="nant.settings.currentframework" value="net-3.5" />
+
+  <!-- Database migration settings -->
+  <property name="database.script.directory" value="Database" />
+
+  <target name="deploy">
+
+    <property name="action" value="Update" />
+    <if test="${reloaddatabase=='true'}">
+	    <property name="action" value="Rebuild" />	
+    </if>
+    <call target="manageSqlDatabase" />
+
+    <echo message="STEP 1 - Configuring ${project::get-name()}..." />
+
+    <property name="connection.string.path" value="//*/hbm:property[@name='connection.connection_string']" />
+
+
+    <xmlpoke file="website/bin/hibernate.cfg.xml"	xpath="${connection.string.path}"	value="${connection.string}">
+      <namespaces>
+        <namespace prefix="hbm" uri="urn:nhibernate-configuration-2.2"></namespace>
+      </namespaces>
+    </xmlpoke>
+
+    <echo message="STEP 5 - Removing Existing ${project::get-name()} Application Files..." />
+
+    <delete dir="${website.target.dir}" />
+
+    <echo message="STEP 6 - Deploying ${project::get-name()} Application Files..." />
+
+    <!-- Copy files to the target machine -->
+    <copy todir="${website.target.dir}" overwrite="true" includeemptydirs="true" >
+      <fileset basedir="website">
+        <include name="**" />
+      </fileset>
+    </copy>
+
+    <if test="${reloaddatabase=='true'}">
+	    <call target="loadDevData" />
+    </if>
+
+    <echo message="Deploy job agent..." />
+    <copy todir="${agents.target.dir}" overwrite="true" includeemptydirs="true" >
+      <fileset basedir="agents">
+        <include name="**" />
+      </fileset>
+    </copy>
+  </target>
+
+  <!-- Database change management -->
+ 
+
+  <target name="manageSqlDatabase">
+    <echo message="database server: ${database.server}" />
+    <manageSqlDatabase
+			scriptDirectory="${database.script.directory}"
+			action="${action}"
+			server="${database.server}"
+			integratedAuthentication="true"
+			database="${database.name}"
+		/>
+
+    <if test="${action != 'Drop'}">
+      <echo message="Current Database Version: ${usdDatabaseVersion}" />
+    </if>
+
+  </target>
+
+   <target name="loadDevData">
+
+    <property name="connection.string.path" value="//*/hbm:property[@name='connection.connection_string']" />
+
+
+    <xmlpoke file="tests/hibernate.cfg.xml"	xpath="${connection.string.path}"	value="${connection.string}">
+      <namespaces>
+        <namespace prefix="hbm" uri="urn:nhibernate-configuration-2.2"></namespace>
+      </namespaces>
+    </xmlpoke>
+
+
+    <xmlpoke file="agents/hibernate.cfg.xml"	xpath="${connection.string.path}"	value="${connection.string}">
+      <namespaces>
+        <namespace prefix="hbm" uri="urn:nhibernate-configuration-2.2"></namespace>
+      </namespaces>
+    </xmlpoke>
+
+
+
+    <nunit2 failonerror="true" verbose="true">
+      <formatter type="Plain" />
+      <test assemblyname="tests/${project::get-name()}.IntegrationTests.dll">
+        <categories>
+          <include name="DataLoader"/>
+          <exclude name="*"/>
+        </categories>
+      </test>
+    </nunit2>
+	</target>
+
+   <target name="pokeUIConfig">
+     <xmlpoke
+         file="tests/${project::get-name()}.UiTests.dll.config"
+         xpath="/configuration/appSettings/add[@key = 'url']/@value"
+         value="${uitesturl}" />
+	</target>
+
+</project>
